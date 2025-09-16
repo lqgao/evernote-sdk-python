@@ -4,7 +4,13 @@ import inspect
 import re
 import oauth2 as oauth
 import urllib
-import urlparse
+try:
+    from urllib.parse import urlparse, parse_qsl, quote
+except ImportError:
+    # Python 2 compatibility
+    import urlparse
+    from urlparse import parse_qsl
+    from urllib import quote
 
 import evernote.edam.userstore.UserStore as UserStore
 import evernote.edam.notestore.NoteStore as NoteStore
@@ -38,16 +44,16 @@ class EvernoteClient(object):
     def get_request_token(self, callback_url):
         client = self._get_oauth_client()
         request_url = '%s?oauth_callback=%s' % (
-            self._get_endpoint('oauth'), urllib.quote(callback_url))
+            self._get_endpoint('oauth'), quote(callback_url))
 
         resp, content = client.request(request_url, 'GET')
-        request_token = dict(urlparse.parse_qsl(content))
+        request_token = dict(parse_qsl(content))
         return request_token
 
     def get_authorize_url(self, request_token):
         return '%s?oauth_token=%s' % (
             self._get_endpoint('OAuth.action'),
-            urllib.quote(request_token['oauth_token']))
+            quote(request_token['oauth_token']))
 
     def get_access_token_dict(
         self, oauth_token, oauth_token_secret, oauth_verifier
@@ -57,7 +63,7 @@ class EvernoteClient(object):
         client = self._get_oauth_client(token)
 
         resp, content = client.request(self._get_endpoint('oauth'), 'POST')
-        access_token_dict = dict(urlparse.parse_qsl(content))
+        access_token_dict = dict(parse_qsl(content))
         self.token = access_token_dict['oauth_token']
         return access_token_dict
 
@@ -143,15 +149,21 @@ class Store(object):
             if targetMethod is None:
                 return object.__getattribute__(self, name)(*args, **kwargs)
 
-            org_args = inspect.getargspec(targetMethod).args
-            if len(org_args) == len(args) + 1:
-                return targetMethod(*args, **kwargs)
-            elif 'authenticationToken' in org_args:
-                skip_args = ['self', 'authenticationToken']
-                arg_names = [i for i in org_args if i not in skip_args]
-                return functools.partial(
-                    targetMethod, authenticationToken=self.token
-                )(**dict(zip(arg_names, args)))
+            try:
+                # Python 3.5+
+                org_args = list(inspect.signature(targetMethod).parameters.keys())
+            except AttributeError:
+                # Python 2 compatibility
+                org_args = inspect.getargspec(targetMethod).args
+            
+            # 如果方法需要 authenticationToken 参数，自动添加
+            if 'authenticationToken' in org_args:
+                # 检查是否已经传递了 authenticationToken 参数
+                if 'authenticationToken' not in kwargs:
+                    # 将 authenticationToken 作为第一个参数插入
+                    return targetMethod(self.token, *args, **kwargs)
+                else:
+                    return targetMethod(*args, **kwargs)
             else:
                 return targetMethod(*args, **kwargs)
 
